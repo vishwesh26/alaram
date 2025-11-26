@@ -1,559 +1,643 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Plus, 
-  Trash2, 
-  Zap, 
-  Volume2, 
-  Bomb, 
-  Trophy, 
-  Calculator, 
-  Palette, 
-  Smartphone, 
-  X,
-  Check,
-  Edit // Added Edit icon
-} from 'lucide-react';
-
-const ComicWakeTaskApp = () => {
-  // --- State (Logic from WakeTask) ---
-  const [currentTime, setCurrentTime] = useState(new Date());
-  
-  const [alarms, setAlarms] = useState(() => {
-    const saved = localStorage.getItem('comic_alarms');
-    return saved ? JSON.parse(saved) : [];
-  });
-  
-  const [streak, setStreak] = useState(() => {
-    return parseInt(localStorage.getItem('comic_streak') || '0');
-  });
-
-  // Modal State
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingId, setEditingId] = useState(null); // Track which alarm is being edited
-  const [formTime, setFormTime] = useState('');
-  const [formTask, setFormTask] = useState('math');
-  const [formVolume, setFormVolume] = useState(100);
-
-  // Ringing & Task State
-  const [ringingAlarm, setRingingAlarm] = useState(null);
-  const [taskState, setTaskState] = useState(null); // { type, question, answer, input, ... }
-  const [isShakePermitted, setIsShakePermitted] = useState(false);
-  
-  // Success Overlay
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [successQuote, setSuccessQuote] = useState('');
-
-  // Refs
-  const audioCtxRef = useRef(null);
-  const oscillatorRef = useRef(null);
-  const beepIntervalRef = useRef(null);
-  const shakeHandlerRef = useRef(null);
-  const lastShakeUpdateRef = useRef(0);
-  const lastShakeAccRef = useRef({ x: 0, y: 0, z: 0 });
-
-  const QUOTES = [
-    "You're a HERO today!",
-    "POW! You crushed it!",
-    "Unstoppable Force!",
-    "Victory is YOURS!",
-    "Up and at 'em, Avenger!",
-    "BOOM! Morning Conquered!",
-    "Kapow! Sleep Defeated!",
-    "Your Origin Story Starts Now!",
-    "Maximum Effort!",
-    "Save the Day!"
-  ];
-
-  // --- Effects ---
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(now);
-
-      if (now.getSeconds() === 0 && !ringingAlarm) {
-        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-        const match = alarms.find(a => a.time === timeStr && a.enabled);
-        if (match) triggerAlarm(match);
-      }
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [alarms, ringingAlarm]);
-
-  useEffect(() => { localStorage.setItem('comic_alarms', JSON.stringify(alarms)); }, [alarms]);
-  useEffect(() => { localStorage.setItem('comic_streak', streak.toString()); }, [streak]);
-
-  // --- Audio Logic ---
-  const initAudio = () => {
-    if (!audioCtxRef.current) audioCtxRef.current = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtxRef.current.state === 'suspended') audioCtxRef.current.resume();
-  };
-
-  const playAlarmSound = (volPercent) => {
-    initAudio();
-    const ctx = audioCtxRef.current;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = 'square'; // 'Square' wave sounds more 8-bit/retro/comic
-    osc.frequency.setValueAtTime(440, ctx.currentTime);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    gain.gain.setValueAtTime(0.01, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime((volPercent / 100) * 0.5, ctx.currentTime + 0.1);
-
-    osc.start();
-    oscillatorRef.current = osc;
-
-    // Siren effect
-    let isHigh = false;
-    beepIntervalRef.current = setInterval(() => {
-      if (!oscillatorRef.current) return;
-      const freq = isHigh ? 500 : 800; // Siren
-      try { oscillatorRef.current.frequency.rampToValueAtTime(freq, ctx.currentTime + 0.1); } catch (e) { }
-      isHigh = !isHigh;
-    }, 400);
-  };
-
-  const stopAlarmSound = () => {
-    if (oscillatorRef.current) {
-      try { oscillatorRef.current.stop(); oscillatorRef.current.disconnect(); } catch (e) { }
-      oscillatorRef.current = null;
-    }
-    if (beepIntervalRef.current) {
-      clearInterval(beepIntervalRef.current);
-      beepIntervalRef.current = null;
-    }
-    if (shakeHandlerRef.current) {
-      window.removeEventListener('devicemotion', shakeHandlerRef.current);
-      shakeHandlerRef.current = null;
-    }
-  };
-
-  // --- Task Logic ---
-
-  const triggerAlarm = (alarm) => {
-    setRingingAlarm(alarm);
-    playAlarmSound(alarm.volume || 100);
-
-    if (alarm.taskType === 'math') setupMathTask();
-    else if (alarm.taskType === 'stroop') setupStroopTask();
-    else if (alarm.taskType === 'shake') setupShakeTask();
-  };
-
-  const completeTask = () => {
-    stopAlarmSound();
-    setRingingAlarm(null);
-    setStreak(s => s + 1);
-    setSuccessQuote(QUOTES[Math.floor(Math.random() * QUOTES.length)]);
-    setShowSuccess(true);
-  };
-
-  // 1. Math
-  const setupMathTask = () => {
-    const ops = ['+', '-', 'x'];
-    const op = ops[Math.floor(Math.random() * ops.length)];
-    let n1 = Math.floor(Math.random() * 20) + 5;
-    let n2 = Math.floor(Math.random() * 10) + 1;
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comic Book Alarm</title>
     
-    let ans = 0;
-    if (op === '+') ans = n1 + n2;
-    else if (op === '-') ans = n1 - n2;
-    else if (op === 'x') { n1 = Math.floor(Math.random() * 12); ans = n1 * n2; }
-
-    setTaskState({ type: 'math', question: `${n1} ${op} ${n2}`, answer: ans.toString(), input: '' });
-  };
-
-  const handleMathSubmit = () => {
-    if (taskState.input.trim() === taskState.answer) completeTask();
-    else {
-      // Wrong Answer Animation logic would go here
-      setTaskState(p => ({ ...p, input: '' })); 
-    }
-  };
-
-  // 2. Stroop
-  const setupStroopTask = () => {
-    const colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange'];
-    // Comic style colors
-    const colorMap = {
-      'red': '#ef4444', 'blue': '#3b82f6', 'green': '#22c55e',
-      'yellow': '#eab308', 'purple': '#a855f7', 'orange': '#f97316'
-    };
-
-    const wordIdx = Math.floor(Math.random() * colors.length);
-    let inkIdx = Math.floor(Math.random() * colors.length);
-    while (inkIdx === wordIdx) inkIdx = Math.floor(Math.random() * colors.length);
-
-    let options = [colors[inkIdx]];
-    while (options.length < 4) {
-      const c = colors[Math.floor(Math.random() * colors.length)];
-      if (!options.includes(c)) options.push(c);
-    }
-    options.sort(() => Math.random() - 0.5);
-
-    setTaskState({
-      type: 'stroop',
-      wordText: colors[wordIdx].toUpperCase(),
-      inkColor: colors[inkIdx],
-      colorMap,
-      options,
-      correctAnswer: colors[inkIdx]
-    });
-  };
-
-  // 3. Shake
-  const setupShakeTask = () => {
-    setTaskState({ type: 'shake', progress: 0 });
-    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
-      setIsShakePermitted(false);
-    } else {
-      startShakeDetection();
-    }
-  };
-
-  const requestShakePerm = () => {
-    DeviceMotionEvent.requestPermission().then(res => {
-      if (res === 'granted') {
-        setIsShakePermitted(true);
-        startShakeDetection();
-      }
-    });
-  };
-
-  const startShakeDetection = () => {
-    lastShakeUpdateRef.current = Date.now();
-    lastShakeAccRef.current = { x: 0, y: 0, z: 0 };
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&display=swap" rel="stylesheet">
     
-    const handler = (event) => {
-      const cur = event.accelerationIncludingGravity;
-      if (!cur) return;
-      const now = Date.now();
-      if ((now - lastShakeUpdateRef.current) > 100) {
-        const diff = now - lastShakeUpdateRef.current;
-        lastShakeUpdateRef.current = now;
-        const speed = Math.abs(cur.x + cur.y + cur.z - lastShakeAccRef.current.x - lastShakeAccRef.current.y - lastShakeAccRef.current.z) / diff * 10000;
-        
-        setTaskState(prev => {
-          if (!prev || prev.type !== 'shake') return prev;
-          let np = prev.progress + (speed > 300 ? 5 : -0.5);
-          if (np < 0) np = 0;
-          if (np >= 100) { np = 100; setTimeout(completeTask, 100); }
-          return { ...prev, progress: np };
-        });
-        lastShakeAccRef.current = { x: cur.x, y: cur.y, z: cur.z };
-      }
-    };
-    shakeHandlerRef.current = handler;
-    window.addEventListener('devicemotion', handler);
-  };
+    <!-- Icons (Lucide via UNPKG) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
 
-  // --- CRUD Logic ---
+    <!-- Tailwind CSS (for layout utility) -->
+    <script src="https://cdn.tailwindcss.com"></script>
 
-  const openModal = (id = null) => {
-    if (id) {
-        // Edit Mode
-        const alarm = alarms.find(a => a.id === id);
-        if (alarm) {
-            setEditingId(id);
-            setFormTime(alarm.time);
-            setFormTask(alarm.taskType);
-            setFormVolume(alarm.volume || 100);
-            setIsModalOpen(true);
-            return;
+    <style>
+        /* --- Comic Styles --- */
+        :root {
+            --comic-yellow: #facc15;
+            --comic-red: #ef4444;
+            --comic-blue: #60a5fa;
+            --comic-green: #22c55e;
+            --comic-border: 4px solid black;
+            --comic-shadow: 4px 4px 0px 0px rgba(0,0,0,1);
         }
-    }
-    // Add Mode
-    setEditingId(null);
-    const now = new Date(); 
-    now.setMinutes(now.getMinutes() + 1);
-    setFormTime(`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`);
-    setFormTask('math');
-    setFormVolume(100);
-    setIsModalOpen(true);
-  };
 
-  const saveAlarm = () => {
-    if (!formTime) return;
-    
-    if (editingId) {
-        // Update existing
-        setAlarms(alarms.map(a => a.id === editingId ? { ...a, time: formTime, taskType: formTask, volume: parseInt(formVolume) } : a));
-    } else {
-        // Create new
-        const newAlarm = { id: Date.now(), time: formTime, taskType: formTask, volume: parseInt(formVolume), enabled: true };
-        setAlarms([...alarms, newAlarm]);
-    }
-    setIsModalOpen(false);
-  };
-  
-  const toggleAlarm = (id) => setAlarms(alarms.map(a => a.id === id ? { ...a, enabled: !a.enabled } : a));
-  const deleteAlarm = (id) => setAlarms(alarms.filter(a => a.id !== id));
+        body {
+            font-family: 'Comic Neue', cursive;
+            background-color: var(--comic-yellow);
+            overflow: hidden;
+            user-select: none;
+        }
 
-  // --- Styles & Assets ---
-  const comicBorder = "border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]";
-  const btnStyle = `transition-all active:translate-x-[2px] active:translate-y-[2px] active:shadow-none`;
+        .font-comic-display {
+            font-family: 'Bangers', cursive;
+            letter-spacing: 0.05em;
+        }
 
-  return (
-    <div className="min-h-screen bg-yellow-400 font-comic relative overflow-hidden select-none">
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Bangers&family=Comic+Neue:wght@400;700&display=swap');
-        .font-comic-display { font-family: 'Bangers', cursive; }
-        .font-comic { font-family: 'Comic Neue', cursive; }
-        
+        .comic-box {
+            border: var(--comic-border);
+            box-shadow: var(--comic-shadow);
+        }
+
+        .comic-btn {
+            transition: all 0.1s;
+            cursor: pointer;
+        }
+        .comic-btn:active {
+            transform: translate(2px, 2px);
+            box-shadow: none;
+        }
+
+        /* Halftone Pattern */
         .halftone {
-          background-image: radial-gradient(circle, #000 2px, transparent 2.5px);
-          background-size: 20px 20px;
-          opacity: 0.1;
+            background-image: radial-gradient(circle, #000 2px, transparent 2.5px);
+            background-size: 20px 20px;
+            opacity: 0.1;
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 0;
         }
-        
-        @keyframes pow-shake {
-          0% { transform: translate(0, 0) rotate(0deg); }
-          25% { transform: translate(-5px, 5px) rotate(-5deg); }
-          50% { transform: translate(5px, -5px) rotate(5deg); }
-          75% { transform: translate(-5px, -5px) rotate(-5deg); }
-          100% { transform: translate(0, 0) rotate(0deg); }
-        }
-        .animate-pow { animation: pow-shake 0.5s infinite; }
 
+        /* Animations */
         @keyframes float-speech {
             0%, 100% { transform: translateY(0); }
             50% { transform: translateY(-10px); }
         }
         .animate-float { animation: float-speech 3s ease-in-out infinite; }
-      `}</style>
 
-      <div className="absolute inset-0 halftone pointer-events-none" />
+        @keyframes pow-shake {
+            0% { transform: translate(0, 0) rotate(0deg); }
+            25% { transform: translate(-5px, 5px) rotate(-5deg); }
+            50% { transform: translate(5px, -5px) rotate(5deg); }
+            75% { transform: translate(-5px, -5px) rotate(-5deg); }
+            100% { transform: translate(0, 0) rotate(0deg); }
+        }
+        .animate-pow { animation: pow-shake 0.5s infinite; }
 
-      {/* --- Main Screen --- */}
-      <div className="relative z-10 flex flex-col items-center h-screen p-6 max-w-md mx-auto">
+        @keyframes spin-slow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .animate-spin-bg { animation: spin-slow 10s linear infinite; }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        .animate-shake { animation: shake 0.5s infinite; }
+
+        /* Utility */
+        .hidden { display: none !important; }
+        .text-shadow { text-shadow: 2px 2px 0px black; }
         
-        {/* Header */}
-        <div className="w-full flex justify-between items-center mb-8 pt-4">
-            <div className={`bg-red-500 text-white px-4 py-1 -rotate-2 ${comicBorder}`}>
-                <h1 className="text-2xl font-comic-display tracking-wider">BOOM! CLOCK</h1>
+        /* Specific element tweaks */
+        #alarm-list::-webkit-scrollbar { display: none; }
+        .stripe-bg {
+            background-image: linear-gradient(45deg,rgba(0,0,0,0.1) 25%,transparent 25%,transparent 50%,rgba(0,0,0,0.1) 50%,rgba(0,0,0,0.1) 75%,transparent 75%,transparent);
+            background-size: 20px 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Background -->
+    <div class="halftone"></div>
+
+    <!-- Main App Container -->
+    <div class="relative z-10 flex flex-col items-center h-screen p-6 max-w-md mx-auto w-full">
+        
+        <!-- Header -->
+        <div class="w-full flex justify-between items-center mb-8 pt-4">
+            <div class="bg-red-500 text-white px-4 py-1 -rotate-2 comic-box">
+                <h1 class="text-2xl font-comic-display tracking-wider">BOOM! CLOCK</h1>
             </div>
-            <div className="flex items-center gap-1 bg-white px-3 py-1 border-2 border-black rotate-1 font-bold">
-                 <Zap size={16} className="fill-yellow-400" />
-                 <span>Streak: {streak}</span>
+            <div class="flex items-center gap-1 bg-white px-3 py-1 border-2 border-black rotate-1 font-bold shadow-[2px_2px_0_black]">
+                 <i data-lucide="zap" class="w-4 h-4 fill-yellow-400 text-black"></i>
+                 <span>Streak: <span id="streak-display">0</span></span>
             </div>
         </div>
 
-        {/* Clock Bubble */}
-        <div className="relative mb-12 animate-float w-full">
-            <div className={`bg-white p-8 rounded-[3rem] ${comicBorder} relative z-10`}>
-                <div className="text-8xl font-comic-display text-center leading-none text-black">
-                    {currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+        <!-- Clock Bubble -->
+        <div class="relative mb-8 w-full animate-float">
+            <div class="bg-white p-8 rounded-[3rem] comic-box relative z-10">
+                <div id="clock-time" class="text-7xl font-comic-display text-center leading-none text-black">
+                    00:00
                 </div>
-                <div className="text-center font-bold text-xl mt-2 bg-blue-200 inline-block px-4 border-2 border-black rotate-2 mx-auto block w-max uppercase">
-                    {currentTime.toLocaleDateString([], { weekday: 'long' })}
+                <div id="clock-date" class="text-center font-bold text-xl mt-2 bg-blue-200 inline-block px-4 border-2 border-black rotate-2 mx-auto block w-max uppercase">
+                    Loading...
                 </div>
             </div>
-            <div className="absolute -bottom-6 left-1/2 w-8 h-8 bg-white border-r-4 border-b-4 border-black transform rotate-45 z-0"></div>
+            <!-- Bubble Tail -->
+            <div class="absolute -bottom-6 left-1/2 w-8 h-8 bg-white border-r-4 border-b-4 border-black transform rotate-45 z-0"></div>
         </div>
 
-        {/* Alarm List */}
-        <div className="w-full flex-1 overflow-y-auto space-y-4 pb-24 px-1">
-            {alarms.length === 0 ? (
-                <div className="text-center opacity-60 font-bold text-xl mt-10 rotate-2">
-                    NO ALARMS... ZZZZ...
-                </div>
-            ) : (
-                alarms.map(alarm => (
-                    <div key={alarm.id} className={`relative group ${alarm.enabled ? 'bg-blue-400' : 'bg-gray-300'} p-4 ${comicBorder} flex justify-between items-center transition-all`}>
-                        <div>
-                            <span className="text-4xl font-comic-display text-white text-shadow-black block leading-none">
-                                {alarm.time}
-                            </span>
-                            <div className="flex items-center gap-1 text-xs font-bold bg-black text-white px-2 py-0.5 mt-1 w-max">
-                                {alarm.taskType === 'math' && <Calculator size={12} />}
-                                {alarm.taskType === 'stroop' && <Palette size={12} />}
-                                {alarm.taskType === 'shake' && <Smartphone size={12} />}
-                                <span className="uppercase">{alarm.taskType}</span>
-                            </div>
-                        </div>
-                        
-                        <div className="flex items-center gap-3">
-                            <button onClick={() => toggleAlarm(alarm.id)} className={`w-12 h-12 flex items-center justify-center border-4 border-black rounded-full transition-colors ${alarm.enabled ? 'bg-yellow-400' : 'bg-white'}`}>
-                                {alarm.enabled && <Zap size={24} className="fill-black" />}
-                            </button>
-                            {/* Edit Button */}
-                             <button onClick={() => openModal(alarm.id)} className={`bg-white p-2 border-4 border-black hover:bg-gray-100 ${btnStyle}`}>
-                                <Edit size={20} />
-                            </button>
-                            <button onClick={() => deleteAlarm(alarm.id)} className={`bg-red-500 p-2 border-4 border-black text-white hover:bg-red-600 ${btnStyle}`}>
-                                <Trash2 size={20} />
-                            </button>
-                        </div>
-                    </div>
-                ))
-            )}
+        <!-- Alarm List -->
+        <div id="alarm-list" class="w-full flex-1 overflow-y-auto space-y-4 pb-24 px-1">
+            <!-- Alarms injected here -->
         </div>
 
-        {/* FAB */}
-        <button 
-            onClick={() => openModal()}
-            className={`absolute bottom-8 w-20 h-20 bg-green-500 rounded-full ${comicBorder} flex items-center justify-center text-white hover:scale-110 active:scale-90 transition-transform z-20`}
-        >
-            <Plus size={40} strokeWidth={4} />
+        <!-- FAB (Add Button) -->
+        <button onclick="openModal()" class="absolute bottom-8 w-20 h-20 bg-green-500 rounded-full comic-box flex items-center justify-center text-white hover:scale-110 transition-transform z-20 comic-btn">
+            <i data-lucide="plus" class="w-10 h-10" stroke-width="4"></i>
         </button>
-      </div>
-
-      {/* --- Add/Edit Modal --- */}
-      {isModalOpen && (
-        <div className="absolute inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className={`bg-white p-6 ${comicBorder} w-full max-w-sm rotate-1 shadow-[10px_10px_0px_rgba(255,255,255,0.2)]`}>
-                <h2 className="text-4xl font-comic-display mb-6 text-center border-b-4 border-black pb-2">
-                    {editingId ? 'EDIT MISSION' : 'NEW MISSION'}
-                </h2>
-                
-                {/* Time Input */}
-                <input 
-                    type="time" 
-                    value={formTime}
-                    onChange={(e) => setFormTime(e.target.value)}
-                    className="w-full text-center text-5xl font-comic-display border-4 border-black p-4 mb-6 bg-yellow-100 focus:bg-white outline-none"
-                />
-
-                {/* Task Select */}
-                <div className="grid grid-cols-3 gap-2 mb-6">
-                    {['math', 'stroop', 'shake'].map(t => (
-                        <button 
-                            key={t} 
-                            onClick={() => setFormTask(t)}
-                            className={`flex flex-col items-center justify-center p-2 border-4 border-black font-bold uppercase text-xs ${formTask === t ? 'bg-blue-400 text-white translate-x-[2px] translate-y-[2px] shadow-none' : 'bg-white shadow-[4px_4px_0px_black]'}`}
-                        >
-                            {t === 'math' && <Calculator size={20} />}
-                            {t === 'stroop' && <Palette size={20} />}
-                            {t === 'shake' && <Smartphone size={20} />}
-                            {t}
-                        </button>
-                    ))}
-                </div>
-
-                <div className="flex gap-4">
-                    <button onClick={() => setIsModalOpen(false)} className={`flex-1 bg-gray-300 font-bold py-3 border-4 border-black shadow-[4px_4px_0px_black] ${btnStyle}`}>CANCEL</button>
-                    <button onClick={saveAlarm} className={`flex-1 bg-green-500 text-white font-bold py-3 border-4 border-black shadow-[4px_4px_0px_black] ${btnStyle}`}>SAVE</button>
-                </div>
-            </div>
-        </div>
-      )}
-
-      {/* --- Ringing Overlay --- */}
-      {ringingAlarm && (
-        <div className="absolute inset-0 bg-red-500 z-50 flex flex-col items-center justify-center overflow-hidden">
-            <div className="absolute inset-0 halftone opacity-20"></div>
-            
-            {/* Background Bursts */}
-            <div className="absolute inset-0 flex items-center justify-center animate-[spin_10s_linear_infinite]">
-                 <div className="w-[150vw] h-[150vw] bg-yellow-400 absolute rotate-12 border-y-[20px] border-black"></div>
-                 <div className="w-[150vw] h-[150vw] bg-orange-500 absolute -rotate-12 border-y-[20px] border-black opacity-50"></div>
-            </div>
-
-            <div className="relative z-10 w-full max-w-md px-6 flex flex-col items-center">
-                <div className="bg-white px-8 py-4 border-8 border-black shadow-[10px_10px_0px_black] -rotate-2 mb-8 animate-pow">
-                    <h1 className="text-7xl font-comic-display text-red-600 leading-none">WAKE UP!</h1>
-                </div>
-
-                {/* --- Task UI --- */}
-                <div className={`bg-white w-full p-6 border-4 border-black shadow-[8px_8px_0px_black] rotate-1`}>
-                    
-                    {/* MATH UI */}
-                    {taskState?.type === 'math' && (
-                        <div className="text-center">
-                             <h3 className="font-bold text-xl mb-4 bg-yellow-300 inline-block px-2 border-2 border-black">SOLVE THIS:</h3>
-                             <div className="text-6xl font-comic-display mb-6">{taskState.question} = ?</div>
-                             <input 
-                                type="number"
-                                autoFocus
-                                value={taskState.input}
-                                onChange={(e) => setTaskState({...taskState, input: e.target.value})}
-                                onKeyDown={(e) => e.key === 'Enter' && handleMathSubmit()}
-                                className="w-full border-4 border-black text-4xl text-center p-2 mb-4 bg-gray-100 font-bold outline-none focus:bg-white"
-                             />
-                             <button onClick={handleMathSubmit} className={`w-full bg-blue-500 text-white text-2xl font-comic-display py-3 border-4 border-black shadow-[4px_4px_0px_black] ${btnStyle}`}>
-                                SUBMIT!
-                             </button>
-                        </div>
-                    )}
-
-                    {/* STROOP UI */}
-                    {taskState?.type === 'stroop' && (
-                        <div className="text-center">
-                            <h3 className="font-bold text-sm mb-4 bg-yellow-300 inline-block px-2 border-2 border-black uppercase">Tap INK COLOR, not word!</h3>
-                            <div className="text-6xl font-comic-display mb-8" style={{ color: taskState.colorMap[taskState.inkColor], textShadow: '3px 3px 0px black' }}>
-                                {taskState.wordText}
-                            </div>
-                            <div className="grid grid-cols-2 gap-3">
-                                {taskState.options.map(color => (
-                                    <button 
-                                        key={color}
-                                        onClick={() => {
-                                            if (color === taskState.correctAnswer) completeTask();
-                                            else setupStroopTask(); // Reset on fail
-                                        }}
-                                        className={`py-3 font-bold uppercase border-4 border-black shadow-[4px_4px_0px_black] ${btnStyle}`}
-                                        style={{ backgroundColor: taskState.colorMap[color], color: 'white', textShadow: '1px 1px 0 #000' }}
-                                    >
-                                        {color}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-                    )}
-
-                    {/* SHAKE UI */}
-                    {taskState?.type === 'shake' && (
-                        <div className="text-center">
-                            <Smartphone size={80} className="mx-auto mb-4 animate-[shake_0.5s_infinite] fill-gray-200" strokeWidth={2.5} />
-                            <h3 className="font-comic-display text-4xl mb-4">SHAKE IT!!</h3>
-                            
-                            <div className="w-full h-12 border-4 border-black bg-white relative">
-                                <div 
-                                    className="h-full bg-green-500 border-r-4 border-black transition-all duration-75"
-                                    style={{ width: `${taskState.progress}%` }}
-                                ></div>
-                                {/* Striped pattern overlay for comic effect */}
-                                <div className="absolute inset-0" style={{ backgroundImage: 'linear-gradient(45deg,rgba(0,0,0,0.1) 25%,transparent 25%,transparent 50%,rgba(0,0,0,0.1) 50%,rgba(0,0,0,0.1) 75%,transparent 75%,transparent)', backgroundSize: '20px 20px' }}></div>
-                            </div>
-                            
-                            {!isShakePermitted && (
-                                <button onClick={requestShakePerm} className="mt-4 underline font-bold">
-                                    Tap to Enable Sensors
-                                </button>
-                            )}
-                        </div>
-                    )}
-                </div>
-            </div>
-        </div>
-      )}
-
-      {/* --- Success Overlay --- */}
-      {showSuccess && (
-        <div className="absolute inset-0 bg-blue-500 z-[60] flex flex-col items-center justify-center p-6 text-center">
-             <div className="absolute inset-0 bg-[radial-gradient(circle,_white_10%,_transparent_10%)] bg-[length:30px_30px] opacity-20"></div>
-             
-             <div className="relative z-10">
-                <Trophy size={120} className="text-yellow-400 mx-auto mb-6 drop-shadow-[5px_5px_0_black]" strokeWidth={3} />
-                <h1 className="text-7xl font-comic-display text-white text-shadow-black mb-2">VICTORY!</h1>
-                <div className={`bg-white p-6 border-4 border-black shadow-[8px_8px_0px_black] rotate-2 max-w-xs mx-auto`}>
-                    <p className="font-comic font-bold text-xl uppercase">"{successQuote}"</p>
-                </div>
-                
-                <button 
-                    onClick={() => setShowSuccess(false)}
-                    className={`mt-12 bg-yellow-400 text-black text-2xl font-comic-display px-12 py-4 border-4 border-black shadow-[8px_8px_0px_black] ${btnStyle}`}
-                >
-                    CONTINUE
-                </button>
-             </div>
-        </div>
-      )}
 
     </div>
-  );
-};
 
-export default ComicWakeTaskApp;
+    <!-- === MODAL: Add/Edit === -->
+    <div id="modal-overlay" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white p-6 comic-box w-full max-w-sm rotate-1 shadow-[10px_10px_0px_rgba(255,255,255,0.2)]">
+            <h2 id="modal-title" class="text-4xl font-comic-display mb-6 text-center border-b-4 border-black pb-2">
+                NEW MISSION
+            </h2>
+            
+            <!-- Time Input -->
+            <input type="time" id="input-time" class="w-full text-center text-5xl font-comic-display border-4 border-black p-4 mb-6 bg-yellow-100 focus:bg-white outline-none">
+
+            <!-- Task Select -->
+            <div class="grid grid-cols-3 gap-2 mb-6" id="task-options">
+                <!-- Injected via JS -->
+            </div>
+
+            <!-- Buttons -->
+            <div class="flex gap-4">
+                <button onclick="closeModal()" class="flex-1 bg-gray-300 font-bold py-3 comic-box comic-btn">CANCEL</button>
+                <button onclick="saveAlarm()" class="flex-1 bg-green-500 text-white font-bold py-3 comic-box comic-btn">SAVE</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- === OVERLAY: Ringing / Task === -->
+    <div id="ringing-overlay" class="fixed inset-0 bg-red-500 z-[100] flex flex-col items-center justify-center overflow-hidden hidden">
+        <div class="halftone opacity-20"></div>
+        
+        <!-- Rotating background bursts -->
+        <div class="absolute inset-0 flex items-center justify-center animate-spin-bg pointer-events-none">
+             <div class="w-[150vw] h-[150vw] bg-yellow-400 absolute rotate-12 border-y-[20px] border-black"></div>
+             <div class="w-[150vw] h-[150vw] bg-orange-500 absolute -rotate-12 border-y-[20px] border-black opacity-50"></div>
+        </div>
+
+        <div class="relative z-10 w-full max-w-md px-6 flex flex-col items-center">
+            <div class="bg-white px-8 py-4 comic-box -rotate-2 mb-8 animate-pow">
+                <h1 class="text-7xl font-comic-display text-red-600 leading-none">WAKE UP!</h1>
+            </div>
+
+            <!-- Task UI Container -->
+            <div id="task-container" class="bg-white w-full p-6 comic-box rotate-1">
+                <!-- Task Content Injected Here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- === OVERLAY: Success === -->
+    <div id="success-overlay" class="fixed inset-0 bg-blue-500 z-[110] flex flex-col items-center justify-center p-6 text-center hidden">
+         <div class="absolute inset-0 bg-[radial-gradient(circle,_white_10%,_transparent_10%)] bg-[length:30px_30px] opacity-20 pointer-events-none"></div>
+         
+         <div class="relative z-10">
+            <i data-lucide="trophy" class="w-32 h-32 text-yellow-400 mx-auto mb-6 drop-shadow-[5px_5px_0_black]"></i>
+            <h1 class="text-7xl font-comic-display text-white text-shadow mb-2">VICTORY!</h1>
+            <div class="bg-white p-6 comic-box rotate-2 max-w-xs mx-auto">
+                <p id="success-quote" class="font-bold text-xl uppercase">"YOU'RE A HERO!"</p>
+            </div>
+            
+            <button onclick="closeSuccess()" class="mt-12 bg-yellow-400 text-black text-2xl font-comic-display px-12 py-4 comic-box comic-btn">
+                CONTINUE
+            </button>
+         </div>
+    </div>
+
+    <!-- JAVASCRIPT LOGIC -->
+    <script>
+        // --- State ---
+        let alarms = JSON.parse(localStorage.getItem('comic_alarms')) || [];
+        let streak = parseInt(localStorage.getItem('comic_streak') || '0');
+        
+        let editingId = null;
+        let selectedTask = 'math';
+        let ringingAlarm = null;
+        
+        // Task State
+        let taskState = {}; // { type, question, answer, etc }
+        
+        // Audio & Shake
+        let audioCtx = null;
+        let oscillator = null;
+        let beepInterval = null;
+        let shakeHandler = null;
+        let lastShakeTime = 0;
+        let lastShakeAcc = {x:0, y:0, z:0};
+        let isShakePermitted = false;
+
+        const QUOTES = [
+            "You're a HERO today!",
+            "POW! You crushed it!",
+            "Unstoppable Force!",
+            "Victory is YOURS!",
+            "Up and at 'em, Avenger!",
+            "BOOM! Morning Conquered!",
+            "Your Origin Story Starts Now!",
+            "Maximum Effort!",
+            "Save the Day!"
+        ];
+
+        // --- Init ---
+        function init() {
+            lucide.createIcons();
+            renderAlarms();
+            updateClock();
+            document.getElementById('streak-display').textContent = streak;
+            
+            setInterval(updateClock, 1000);
+        }
+
+        function updateClock() {
+            const now = new Date();
+            const h = String(now.getHours()).padStart(2,'0');
+            const m = String(now.getMinutes()).padStart(2,'0');
+            
+            document.getElementById('clock-time').textContent = `${h}:${m}`;
+            document.getElementById('clock-date').textContent = now.toLocaleDateString('en-US', { weekday: 'long' });
+
+            // Check Alarms
+            if (now.getSeconds() === 0 && !ringingAlarm) {
+                const timeStr = `${h}:${m}`;
+                const match = alarms.find(a => a.time === timeStr && a.enabled);
+                if (match) triggerAlarm(match);
+            }
+        }
+
+        // --- Render UI ---
+        function renderAlarms() {
+            const list = document.getElementById('alarm-list');
+            list.innerHTML = '';
+
+            if (alarms.length === 0) {
+                list.innerHTML = `<div class="text-center opacity-60 font-bold text-xl mt-10 rotate-2">NO ALARMS... ZZZZ...</div>`;
+                return;
+            }
+
+            // Sort by time
+            const sorted = [...alarms].sort((a,b) => a.time.localeCompare(b.time));
+
+            sorted.forEach(alarm => {
+                const el = document.createElement('div');
+                el.className = `relative group p-4 comic-box flex justify-between items-center transition-all ${alarm.enabled ? 'bg-blue-400' : 'bg-gray-300'}`;
+                
+                // Icon based on task
+                let taskIcon = 'calculator';
+                if(alarm.taskType === 'stroop') taskIcon = 'palette';
+                if(alarm.taskType === 'shake') taskIcon = 'smartphone';
+
+                el.innerHTML = `
+                    <div>
+                        <span class="text-4xl font-comic-display text-white text-shadow block leading-none">
+                            ${alarm.time}
+                        </span>
+                        <div class="flex items-center gap-1 text-xs font-bold bg-black text-white px-2 py-0.5 mt-1 w-max">
+                            <i data-lucide="${taskIcon}" class="w-3 h-3"></i>
+                            <span class="uppercase">${alarm.taskType}</span>
+                        </div>
+                    </div>
+                    
+                    <div class="flex items-center gap-3">
+                        <button onclick="toggleAlarm(${alarm.id})" class="w-12 h-12 flex items-center justify-center border-4 border-black rounded-full transition-colors comic-btn ${alarm.enabled ? 'bg-yellow-400' : 'bg-white'}">
+                            ${alarm.enabled ? '<i data-lucide="zap" class="w-6 h-6 fill-black"></i>' : ''}
+                        </button>
+                        <button onclick="openModal(${alarm.id})" class="bg-white p-2 border-4 border-black hover:bg-gray-100 comic-btn">
+                            <i data-lucide="edit" class="w-5 h-5"></i>
+                        </button>
+                        <button onclick="deleteAlarm(${alarm.id})" class="bg-red-500 p-2 border-4 border-black text-white hover:bg-red-600 comic-btn">
+                            <i data-lucide="trash-2" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                `;
+                list.appendChild(el);
+            });
+            lucide.createIcons();
+        }
+
+        // --- Modal Logic ---
+        function openModal(id = null) {
+            const modal = document.getElementById('modal-overlay');
+            const title = document.getElementById('modal-title');
+            const timeInp = document.getElementById('input-time');
+            
+            modal.classList.remove('hidden');
+            
+            if (id) {
+                // Edit
+                editingId = id;
+                const alarm = alarms.find(a => a.id === id);
+                title.textContent = 'EDIT MISSION';
+                timeInp.value = alarm.time;
+                selectedTask = alarm.taskType;
+            } else {
+                // Add
+                editingId = null;
+                title.textContent = 'NEW MISSION';
+                const now = new Date(); now.setMinutes(now.getMinutes()+1);
+                timeInp.value = `${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
+                selectedTask = 'math';
+            }
+            renderTaskOptions();
+        }
+
+        function closeModal() {
+            document.getElementById('modal-overlay').classList.add('hidden');
+        }
+
+        function renderTaskOptions() {
+            const container = document.getElementById('task-options');
+            const tasks = ['math', 'stroop', 'shake'];
+            const icons = { 'math': 'calculator', 'stroop': 'palette', 'shake': 'smartphone' };
+            
+            container.innerHTML = tasks.map(t => `
+                <button onclick="setTaskType('${t}')" class="flex flex-col items-center justify-center p-2 border-4 border-black font-bold uppercase text-xs comic-btn ${selectedTask === t ? 'bg-blue-400 text-white translate-x-[2px] translate-y-[2px] shadow-none' : 'bg-white shadow-[4px_4px_0px_black]'}">
+                    <i data-lucide="${icons[t]}" class="w-5 h-5 mb-1"></i>
+                    ${t}
+                </button>
+            `).join('');
+            lucide.createIcons();
+        }
+
+        function setTaskType(type) {
+            selectedTask = type;
+            renderTaskOptions();
+        }
+
+        function saveAlarm() {
+            const timeVal = document.getElementById('input-time').value;
+            if(!timeVal) return;
+
+            if (editingId) {
+                const idx = alarms.findIndex(a => a.id === editingId);
+                if (idx > -1) {
+                    alarms[idx] = { ...alarms[idx], time: timeVal, taskType: selectedTask };
+                }
+            } else {
+                alarms.push({
+                    id: Date.now(),
+                    time: timeVal,
+                    taskType: selectedTask,
+                    enabled: true,
+                    volume: 100
+                });
+            }
+            
+            localStorage.setItem('comic_alarms', JSON.stringify(alarms));
+            renderAlarms();
+            closeModal();
+        }
+
+        function toggleAlarm(id) {
+            const idx = alarms.findIndex(a => a.id === id);
+            if (idx > -1) {
+                alarms[idx].enabled = !alarms[idx].enabled;
+                localStorage.setItem('comic_alarms', JSON.stringify(alarms));
+                renderAlarms();
+            }
+        }
+
+        function deleteAlarm(id) {
+            if(!confirm("Delete this mission?")) return;
+            alarms = alarms.filter(a => a.id !== id);
+            localStorage.setItem('comic_alarms', JSON.stringify(alarms));
+            renderAlarms();
+        }
+
+        // --- Trigger Alarm & Task Logic ---
+        function triggerAlarm(alarm) {
+            ringingAlarm = alarm;
+            document.getElementById('ringing-overlay').classList.remove('hidden');
+            startAlarmSound();
+            
+            const container = document.getElementById('task-container');
+            container.innerHTML = '';
+            
+            if (alarm.taskType === 'math') renderMathTask(container);
+            else if (alarm.taskType === 'stroop') renderStroopTask(container);
+            else if (alarm.taskType === 'shake') renderShakeTask(container);
+        }
+
+        // Math Logic
+        function renderMathTask(container) {
+            const ops = ['+', '-', 'x'];
+            const op = ops[Math.floor(Math.random() * ops.length)];
+            let n1 = Math.floor(Math.random() * 20) + 5;
+            let n2 = Math.floor(Math.random() * 10) + 1;
+            let ans = 0;
+
+            if (op === '+') ans = n1 + n2;
+            else if (op === '-') ans = n1 - n2;
+            else if (op === 'x') { n1 = Math.floor(Math.random() * 12); ans = n1 * n2; }
+
+            taskState = { answer: ans.toString() };
+
+            container.innerHTML = `
+                <div class="text-center">
+                    <h3 class="font-bold text-xl mb-4 bg-yellow-300 inline-block px-2 border-2 border-black">SOLVE THIS:</h3>
+                    <div class="text-6xl font-comic-display mb-6">${n1} ${op} ${n2} = ?</div>
+                    <input type="number" id="math-input" class="w-full border-4 border-black text-4xl text-center p-2 mb-4 bg-gray-100 font-bold outline-none focus:bg-white" autofocus>
+                    <button onclick="checkMath()" class="w-full bg-blue-500 text-white text-2xl font-comic-display py-3 border-4 border-black shadow-[4px_4px_0px_black] comic-btn">
+                        SUBMIT!
+                    </button>
+                </div>
+            `;
+            setTimeout(() => document.getElementById('math-input').focus(), 100);
+        }
+
+        function checkMath() {
+            const val = document.getElementById('math-input').value;
+            if (val === taskState.answer) completeTask();
+            else {
+                const inp = document.getElementById('math-input');
+                inp.value = '';
+                inp.classList.add('bg-red-200');
+                setTimeout(() => inp.classList.remove('bg-red-200'), 200);
+            }
+        }
+
+        // Stroop Logic
+        function renderStroopTask(container) {
+            const colors = ['red', 'blue', 'green', 'yellow', 'purple', 'orange'];
+            const colorMap = {
+                'red': '#ef4444', 'blue': '#3b82f6', 'green': '#22c55e',
+                'yellow': '#eab308', 'purple': '#a855f7', 'orange': '#f97316'
+            };
+
+            const wordIdx = Math.floor(Math.random() * colors.length);
+            let inkIdx = Math.floor(Math.random() * colors.length);
+            while(inkIdx === wordIdx) inkIdx = Math.floor(Math.random() * colors.length);
+
+            const wordText = colors[wordIdx].toUpperCase();
+            const inkColor = colors[inkIdx];
+            taskState = { correctAnswer: inkColor };
+
+            let options = [inkColor];
+            while(options.length < 4) {
+                const c = colors[Math.floor(Math.random() * colors.length)];
+                if(!options.includes(c)) options.push(c);
+            }
+            options.sort(() => Math.random() - 0.5);
+
+            container.innerHTML = `
+                <div class="text-center">
+                    <h3 class="font-bold text-sm mb-4 bg-yellow-300 inline-block px-2 border-2 border-black uppercase">Tap INK COLOR, not word!</h3>
+                    <div class="text-6xl font-comic-display mb-8" style="color: ${colorMap[inkColor]}; text-shadow: 3px 3px 0px black;">
+                        ${wordText}
+                    </div>
+                    <div class="grid grid-cols-2 gap-3">
+                        ${options.map(c => `
+                            <button onclick="checkStroop('${c}')" class="py-3 font-bold uppercase border-4 border-black shadow-[4px_4px_0px_black] comic-btn" style="background-color:${colorMap[c]}; color:white; text-shadow:1px 1px 0 #000">
+                                ${c}
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function checkStroop(color) {
+            if (color === taskState.correctAnswer) completeTask();
+            else renderStroopTask(document.getElementById('task-container')); // reset on fail
+        }
+
+        // Shake Logic
+        function renderShakeTask(container) {
+            taskState = { progress: 0 };
+            
+            container.innerHTML = `
+                <div class="text-center">
+                    <i data-lucide="smartphone" class="mx-auto mb-4 animate-shake w-20 h-20 fill-gray-200"></i>
+                    <h3 class="font-comic-display text-4xl mb-4">SHAKE IT!!</h3>
+                    
+                    <div class="w-full h-12 border-4 border-black bg-white relative">
+                        <div id="shake-bar" class="h-full bg-green-500 border-r-4 border-black transition-all duration-75" style="width: 0%"></div>
+                        <div class="absolute inset-0 stripe-bg pointer-events-none"></div>
+                    </div>
+                    
+                    <button id="perm-btn" onclick="requestShake()" class="mt-4 underline font-bold ${isShakePermitted ? 'hidden' : ''}">
+                        Tap to Enable Sensors
+                    </button>
+                </div>
+            `;
+            lucide.createIcons();
+
+            if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                isShakePermitted = false;
+            } else {
+                startShakeDetection();
+            }
+        }
+
+        function requestShake() {
+             if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                DeviceMotionEvent.requestPermission().then(res => {
+                    if(res === 'granted') {
+                        isShakePermitted = true;
+                        document.getElementById('perm-btn').classList.add('hidden');
+                        startShakeDetection();
+                    }
+                });
+             }
+        }
+
+        function startShakeDetection() {
+            if(shakeHandler) return;
+            lastShakeTime = Date.now();
+            
+            shakeHandler = (e) => {
+                const cur = e.accelerationIncludingGravity;
+                if(!cur) return;
+                const now = Date.now();
+                
+                if ((now - lastShakeTime) > 100) {
+                    const diff = now - lastShakeTime;
+                    lastShakeTime = now;
+                    const speed = Math.abs(cur.x + cur.y + cur.z - lastShakeAcc.x - lastShakeAcc.y - lastShakeAcc.z) / diff * 10000;
+                    
+                    if (speed > 300) {
+                        taskState.progress += 5;
+                    } else {
+                        taskState.progress -= 0.5;
+                    }
+                    
+                    if (taskState.progress < 0) taskState.progress = 0;
+                    if (taskState.progress > 100) taskState.progress = 100;
+
+                    const bar = document.getElementById('shake-bar');
+                    if(bar) bar.style.width = taskState.progress + '%';
+
+                    if(taskState.progress >= 100) completeTask();
+
+                    lastShakeAcc = {x: cur.x, y: cur.y, z: cur.z};
+                }
+            };
+            window.addEventListener('devicemotion', shakeHandler);
+        }
+
+        // --- Audio ---
+        function startAlarmSound() {
+            if(!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            
+            oscillator = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            // Reverted to 'square' for the classic comic/arcade sound
+            oscillator.type = 'square';
+            oscillator.frequency.value = 440;
+            oscillator.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            // Standard volume
+            gain.gain.value = 0.1;
+            oscillator.start();
+            
+            let high = false;
+            // Original siren interval (alternating 500Hz and 800Hz)
+            beepInterval = setInterval(() => {
+                if(oscillator) oscillator.frequency.value = high ? 800 : 500;
+                high = !high;
+            }, 300);
+        }
+
+        function stopAlarmSound() {
+            if(oscillator) {
+                try { oscillator.stop(); oscillator.disconnect(); } catch(e){}
+                oscillator = null;
+            }
+            if(beepInterval) { clearInterval(beepInterval); beepInterval = null; }
+            if(shakeHandler) { window.removeEventListener('devicemotion', shakeHandler); shakeHandler = null; }
+        }
+
+        function completeTask() {
+            stopAlarmSound();
+            ringingAlarm = null;
+            streak++;
+            localStorage.setItem('comic_streak', streak);
+            document.getElementById('streak-display').textContent = streak;
+            
+            document.getElementById('ringing-overlay').classList.add('hidden');
+            document.getElementById('success-overlay').classList.remove('hidden');
+            
+            const q = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+            document.getElementById('success-quote').textContent = `"${q}"`;
+        }
+
+        function closeSuccess() {
+            document.getElementById('success-overlay').classList.add('hidden');
+        }
+
+        // Init
+        init();
+
+    </script>
+</body>
+</html>
