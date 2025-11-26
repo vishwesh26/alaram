@@ -1,530 +1,866 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Bell, Plus, Trash2, Edit2, Brain, Calculator, X, Trophy, Volume2 } from 'lucide-react';
-
-const WakeTaskApp = () => {
-  // --- State ---
-  const [currentTime, setCurrentTime] = useState(new Date());
-  const [alarms, setAlarms] = useState(() => {
-    const saved = localStorage.getItem('waketask_alarms');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [streak, setStreak] = useState(() => {
-    return parseInt(localStorage.getItem('waketask_streak') || '0');
-  });
-
-  // Modal State for Create/Edit
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingId, setEditingId] = useState(null); 
-  const [formTime, setFormTime] = useState('');
-  const [formTask, setFormTask] = useState('math');
-  const [formVolume, setFormVolume] = useState(100); // New: Volume 0-100
-
-  // Active Alarm State (Ringing)
-  const [ringingAlarm, setRingingAlarm] = useState(null);
-  const [taskQuestion, setTaskQuestion] = useState('');
-  const [taskAnswer, setTaskAnswer] = useState(''); 
-  const [userInput, setUserInput] = useState('');
-  const [inputError, setInputError] = useState(false);
-
-  // Success State
-  const [showSuccess, setShowSuccess] = useState(false);
-  const [quote, setQuote] = useState('');
-
-  // Audio Refs
-  const audioContextRef = useRef(null);
-  const oscillatorRef = useRef(null);
-  const gainNodeRef = useRef(null);
-  const intervalRef = useRef(null);
-
-  // Constants
-  const QUOTES = [
-    "Your limitation—it's only your imagination.",
-    "Push yourself, because no one else is going to do it for you.",
-    "Great things never come from comfort zones.",
-    "Dream it. Wish it. Do it.",
-    "Success doesn't just find you. You have to go out and get it."
-  ];
-
-  // --- Effects ---
-
-  // Clock & Alarm Checker
-  useEffect(() => {
-    const clockInterval = setInterval(() => {
-      const now = new Date();
-      setCurrentTime(now);
-
-      if (now.getSeconds() === 0 && !ringingAlarm) {
-        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-        
-        const match = alarms.find(a => a.time === timeStr && a.enabled);
-        if (match) {
-          triggerAlarm(match);
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WakeTask - Smart Alarm</title>
+    <style>
+        :root {
+            --primary: #6366f1; /* Indigo */
+            --primary-hover: #4f46e5;
+            --accent: #14b8a6; /* Teal */
+            --danger: #ef4444;
+            --dark-bg: #0f172a;
+            --card-bg: rgba(30, 41, 59, 0.7);
+            --glass: rgba(255, 255, 255, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
         }
-      }
-    }, 1000);
 
-    return () => clearInterval(clockInterval);
-  }, [alarms, ringingAlarm]);
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            -webkit-tap-highlight-color: transparent;
+        }
 
-  useEffect(() => {
-    localStorage.setItem('waketask_alarms', JSON.stringify(alarms));
-  }, [alarms]);
+        body {
+            background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
+            color: var(--text-main);
+            min-height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
 
-  useEffect(() => {
-    localStorage.setItem('waketask_streak', streak.toString());
-  }, [streak]);
-
-  // --- Audio Logic ---
-  const initAudio = () => {
-    if (!audioContextRef.current) {
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-    }
-    if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
-    }
-  };
-
-  const startAlarmSound = (volumePercent) => {
-    initAudio();
-    const ctx = audioContextRef.current;
-    
-    // Create nodes
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    
-    // Convert 0-100 to 0.0-1.0 gain
-    const maxGain = volumePercent / 100;
-
-    osc.type = 'square';
-    osc.frequency.setValueAtTime(440, ctx.currentTime);
-    
-    // Connect
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    
-    // Set initial volume
-    gain.gain.setValueAtTime(0.01, ctx.currentTime);
-    // Ramp up to user set volume
-    gain.gain.exponentialRampToValueAtTime(Math.max(0.01, maxGain), ctx.currentTime + 0.5);
-
-    osc.start();
-    oscillatorRef.current = osc;
-    gainNodeRef.current = gain;
-
-    // Rhythmic beeping
-    let isHigh = false;
-    intervalRef.current = setInterval(() => {
-      if (!oscillatorRef.current) return;
-      const freq = isHigh ? 440 : 880; 
-      oscillatorRef.current.frequency.setValueAtTime(freq, ctx.currentTime);
-      isHigh = !isHigh;
-    }, 500);
-  };
-
-  const stopAlarmSound = () => {
-    if (oscillatorRef.current) {
-      try {
-        oscillatorRef.current.stop();
-        oscillatorRef.current.disconnect();
-      } catch (e) { console.error(e); }
-      oscillatorRef.current = null;
-    }
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
-  };
-
-  // --- Logic ---
-
-  const triggerAlarm = (alarm) => {
-    setRingingAlarm(alarm);
-    
-    // Generate Task
-    if (alarm.taskType === 'math') {
-      const operators = ['+', '-', '*'];
-      const op = operators[Math.floor(Math.random() * operators.length)];
-      let n1 = Math.floor(Math.random() * 20) + 5;
-      let n2 = Math.floor(Math.random() * 10) + 1;
-      
-      if (op === '*') n1 = Math.floor(Math.random() * 12);
-      
-      let ans = 0;
-      if (op === '+') ans = n1 + n2;
-      else if (op === '-') ans = n1 - n2;
-      else if (op === '*') ans = n1 * n2;
-      
-      setTaskQuestion(`${n1} ${op} ${n2} = ?`);
-      setTaskAnswer(ans.toString());
-    } else {
-      // Memory
-      const words = ['WAKE', 'RISE', 'SHINE', 'FAST', 'GOAL', 'CODE'];
-      const w1 = words[Math.floor(Math.random() * words.length)];
-      const w2 = Math.floor(Math.random() * 999);
-      const target = `${w1}-${w2}`;
-      
-      setTaskQuestion(`Memorize: ${target}`);
-      setTaskAnswer(target);
-      
-      setTimeout(() => {
-         setTaskQuestion("Type the code:");
-      }, 15000);
-    }
-
-    // Pass the saved volume to the sound function (default to 100 if missing)
-    startAlarmSound(alarm.volume || 100);
-  };
-
-  const handleTaskSubmit = () => {
-    if (userInput.trim().toUpperCase() === taskAnswer.toUpperCase()) {
-      stopAlarmSound();
-      setRingingAlarm(null);
-      setUserInput('');
-      setStreak(s => s + 1);
-      setQuote(QUOTES[Math.floor(Math.random() * QUOTES.length)]);
-      setShowSuccess(true);
-    } else {
-      setInputError(true);
-      setUserInput('');
-      setTimeout(() => setInputError(false), 500);
-    }
-  };
-
-  const handleDismissSuccess = () => {
-    setShowSuccess(false);
-  };
-
-  // --- CRUD Operations ---
-
-  const openCreateModal = () => {
-    setEditingId(null);
-    const now = new Date();
-    now.setMinutes(now.getMinutes() + 1);
-    const h = String(now.getHours()).padStart(2, '0');
-    const m = String(now.getMinutes()).padStart(2, '0');
-    
-    setFormTime(`${h}:${m}`);
-    setFormTask('math');
-    setFormVolume(100); // Default full volume
-    setIsModalOpen(true);
-  };
-
-  const openEditModal = (alarm) => {
-    setEditingId(alarm.id);
-    setFormTime(alarm.time);
-    setFormTask(alarm.taskType);
-    setFormVolume(alarm.volume || 100);
-    setIsModalOpen(true);
-  };
-
-  const saveAlarm = () => {
-    if (!formTime) return;
-
-    if (editingId) {
-      // Edit
-      setAlarms(prev => prev.map(a => 
-        a.id === editingId 
-          ? { ...a, time: formTime, taskType: formTask, volume: formVolume } 
-          : a
-      ));
-    } else {
-      // Create
-      const newAlarm = {
-        id: Date.now(),
-        time: formTime,
-        taskType: formTask,
-        volume: formVolume,
-        enabled: true
-      };
-      setAlarms(prev => [...prev, newAlarm]);
-    }
-
-    initAudio();
-    setIsModalOpen(false);
-  };
-
-  const toggleAlarm = (id) => {
-    setAlarms(prev => prev.map(a => 
-      a.id === id ? { ...a, enabled: !a.enabled } : a
-    ));
-  };
-
-  const deleteAlarm = (id) => {
-    setAlarms(prev => prev.filter(a => a.id !== id));
-  };
-
-  // --- Render Helpers ---
-
-  const formatTimeDisplay = (date) => {
-    const h = String(date.getHours()).padStart(2, '0');
-    const m = String(date.getMinutes()).padStart(2, '0');
-    return `${h}:${m}`;
-  };
-
-  const formatDateDisplay = (date) => {
-    return date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
-  };
-
-  const getFriendlyTime = (timeStr) => {
-    const [h, m] = timeStr.split(':');
-    const d = new Date();
-    d.setHours(h);
-    d.setMinutes(m);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-indigo-900 text-slate-50 font-sans flex flex-col items-center overflow-hidden relative selection:bg-indigo-500/30">
-      
-      {/* Main Container */}
-      <div className="w-full max-w-md h-screen flex flex-col relative bg-slate-900/20 backdrop-blur-sm shadow-2xl">
+        /* --- Utility Classes --- */
+        .hidden { display: none !important; }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
         
-        {/* Header */}
-        <header className="pt-10 pb-6 px-6 text-center">
-          <div className="text-7xl font-extralight tracking-tighter bg-clip-text text-transparent bg-gradient-to-b from-white to-slate-400">
-            {formatTimeDisplay(currentTime)}
-          </div>
-          <div className="text-slate-400 text-lg mt-[-0.5rem] font-medium">
-            {formatDateDisplay(currentTime)}
-          </div>
-          <div className="mt-4 inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 font-semibold text-sm">
-            <Trophy size={14} /> Streak: {streak} days
-          </div>
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        .shake-anim { animation: shake 0.2s ease-in-out 0s 2; }
+
+        /* --- Main Container --- */
+        #app-container {
+            width: 100%;
+            max-width: 480px;
+            height: 100vh;
+            position: relative;
+            background: rgba(0,0,0,0.2);
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 0 50px rgba(0,0,0,0.5);
+        }
+
+        /* --- Header / Clock --- */
+        header {
+            padding: 2rem 1.5rem;
+            text-align: center;
+        }
+
+        .current-time {
+            font-size: 4rem;
+            font-weight: 200;
+            letter-spacing: -2px;
+            background: linear-gradient(to bottom, #fff, #94a3b8);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .current-date {
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            margin-top: -0.5rem;
+        }
+
+        .streak-badge {
+            margin-top: 1rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            background: rgba(255, 215, 0, 0.15);
+            color: #ffd700;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            border: 1px solid rgba(255, 215, 0, 0.3);
+        }
+
+        /* --- Alarm List --- */
+        .alarm-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            scrollbar-width: none; /* Firefox */
+        }
+        .alarm-list::-webkit-scrollbar { display: none; /* Chrome */ }
+
+        .alarm-card {
+            background: var(--card-bg);
+            border: 1px solid var(--glass);
+            border-radius: 16px;
+            padding: 1.2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: transform 0.2s, background 0.2s;
+        }
+
+        .alarm-card:active { transform: scale(0.98); }
+
+        .alarm-info h2 {
+            font-size: 2rem;
+            font-weight: 500;
+            line-height: 1;
+            margin-bottom: 5px;
+        }
+
+        .alarm-details {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 600;
+        }
+
+        /* --- Controls in Card --- */
+        .card-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .icon-btn {
+            background: rgba(255,255,255,0.05);
+            border: none;
+            color: var(--text-muted);
+            padding: 8px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        .icon-btn:hover { background: rgba(255,255,255,0.1); color: white; }
+        .icon-btn.delete:hover { color: var(--danger); background: rgba(239, 68, 68, 0.1); }
+
+        /* --- Toggle Switch --- */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #334155;
+            transition: .4s;
+            border-radius: 34px;
+        }
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        input:checked + .slider { background-color: var(--primary); }
+        input:checked + .slider:before { transform: translateX(20px); }
+
+        /* --- FAB --- */
+        .fab {
+            position: absolute;
+            bottom: 2rem;
+            right: 2rem;
+            width: 60px;
+            height: 60px;
+            background: var(--accent);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #0f172a;
+            box-shadow: 0 10px 25px rgba(20, 184, 166, 0.4);
+            cursor: pointer;
+            border: none;
+            transition: transform 0.2s;
+            z-index: 10;
+        }
+        .fab:hover { transform: scale(1.1); }
+        .fab svg { width: 32px; height: 32px; stroke-width: 2.5; }
+
+        /* --- Modal --- */
+        .modal-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8);
+            backdrop-filter: blur(5px);
+            z-index: 100;
+            display: flex;
+            align-items: flex-end; /* Mobile: bottom sheet */
+            justify-content: center;
+        }
+        @media(min-width: 480px) {
+            .modal-overlay { align-items: center; }
+            .modal-content { border-radius: 24px !important; max-width: 400px; margin: 0 20px; }
+        }
+
+        .modal-content {
+            background: #1e293b;
+            width: 100%;
+            border-top-left-radius: 24px;
+            border-top-right-radius: 24px;
+            padding: 2rem;
+            animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            border: 1px solid var(--glass);
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+        .modal-header h3 { font-size: 1.2rem; font-weight: 600; }
+
+        .form-group { margin-bottom: 1.5rem; }
+        label { display: block; color: var(--text-muted); margin-bottom: 0.5rem; font-size: 0.9rem; }
+
+        input[type="time"] {
+            width: 100%;
+            background: #0f172a;
+            border: 1px solid #334155;
+            color: white;
+            padding: 1rem;
+            font-size: 2rem;
+            border-radius: 12px;
+            text-align: center;
+            outline: none;
+        }
+
+        /* Custom Task Select */
+        .task-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .task-option {
+            background: #0f172a;
+            border: 1px solid #334155;
+            color: var(--text-muted);
+            padding: 1rem;
+            border-radius: 12px;
+            cursor: pointer;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+            transition: all 0.2s;
+        }
+        .task-option.selected {
+            background: rgba(99, 102, 241, 0.1);
+            border-color: var(--primary);
+            color: #a5b4fc;
+        }
+        .task-option svg { width: 24px; height: 24px; }
+
+        /* Volume Slider */
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            background: #334155;
+            border-radius: 5px;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--primary);
+            cursor: pointer;
+        }
+
+        .btn-primary {
+            width: 100%;
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 1rem;
+            font-size: 1.1rem;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 1rem;
+        }
+        .btn-primary:active { transform: scale(0.98); }
+
+        /* --- Alarm Ringing Overlay --- */
+        #alarm-overlay {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, #ef4444 0%, #7f1d1d 100%);
+            z-index: 999;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .bell-icon { font-size: 5rem; margin-bottom: 1rem; animation: bellShake 1s infinite; }
+        @keyframes bellShake {
+            0%, 100% { transform: rotate(0); }
+            10%, 30%, 50%, 70%, 90% { transform: rotate(15deg); }
+            20%, 40%, 60%, 80% { transform: rotate(-15deg); }
+        }
+
+        .task-container {
+            background: white;
+            color: #0f172a;
+            padding: 2rem;
+            border-radius: 20px;
+            width: 100%;
+            max-width: 350px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+        }
+
+        .task-question { font-size: 2rem; font-weight: 700; margin: 1.5rem 0; color: #1e293b; font-family: monospace;}
+        
+        .task-input {
+            width: 100%;
+            padding: 1rem;
+            font-size: 1.5rem;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 1rem;
+        }
+        .task-input:focus { border-color: var(--primary); outline: none; }
+        
+        .task-input.error { border-color: var(--danger); background: #fef2f2; }
+
+        /* --- Success Overlay --- */
+        #success-overlay {
+            background: linear-gradient(135deg, #059669 0%, #064e3b 100%);
+        }
+        .quote-box {
+            font-style: italic;
+            font-size: 1.2rem;
+            line-height: 1.6;
+            margin-top: 1rem;
+            opacity: 0.9;
+            background: rgba(255,255,255,0.1);
+            padding: 1.5rem;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+    </style>
+</head>
+<body>
+
+    <div id="app-container">
+        <!-- Header -->
+        <header>
+            <div class="current-time" id="clock-display">00:00</div>
+            <div class="current-date" id="date-display">...</div>
+            <div class="streak-badge" id="streak-display">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+                Streak: 0 days
+            </div>
         </header>
 
-        {/* Alarm List */}
-        <div className="flex-1 overflow-y-auto px-4 pb-24 space-y-4 scrollbar-hide">
-          {alarms.length === 0 ? (
-            <div className="text-center mt-12 text-slate-500">
-              <p className="text-lg">No alarms set.</p>
-              <p className="text-sm opacity-70">Sleep well! 😴</p>
-            </div>
-          ) : (
-            alarms.sort((a,b) => a.time.localeCompare(b.time)).map(alarm => (
-              <div 
-                key={alarm.id} 
-                className="group relative bg-slate-800/60 backdrop-blur-md border border-white/5 rounded-2xl p-5 flex items-center justify-between transition-all hover:bg-slate-800/80 active:scale-[0.98]"
-              >
-                <div>
-                  <h2 className="text-3xl font-medium text-white tracking-tight">
-                    {getFriendlyTime(alarm.time)}
-                  </h2>
-                  <div className="flex items-center gap-2 text-slate-400 text-sm mt-1">
-                    {alarm.taskType === 'math' ? <Calculator size={14} /> : <Brain size={14} />}
-                    <span className="uppercase tracking-wider text-xs font-semibold">
-                      {alarm.taskType}
-                    </span>
-                    <span className="text-slate-600 px-1">|</span>
-                    <Volume2 size={14} />
-                    <span className="text-xs">{alarm.volume || 100}%</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-4">
-                  <button 
-                    onClick={() => openEditModal(alarm)}
-                    className="p-2 text-slate-400 hover:text-indigo-400 transition-colors bg-white/5 rounded-lg hover:bg-white/10"
-                    title="Edit Alarm"
-                  >
-                    <Edit2 size={18} />
-                  </button>
-
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input 
-                      type="checkbox" 
-                      className="sr-only peer" 
-                      checked={alarm.enabled}
-                      onChange={() => toggleAlarm(alarm.id)}
-                    />
-                    <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
-                  </label>
-
-                  <button 
-                    onClick={() => deleteAlarm(alarm.id)}
-                    className="text-red-400/60 hover:text-red-400 transition-colors ml-1"
-                  >
-                    <Trash2 size={20} />
-                  </button>
-                </div>
-              </div>
-            ))
-          )}
+        <!-- Alarm List -->
+        <div class="alarm-list" id="alarm-list">
+            <!-- Alarms will be injected here via JS -->
         </div>
 
-        {/* FAB */}
-        <button 
-          onClick={openCreateModal}
-          className="absolute bottom-8 right-6 w-14 h-14 bg-teal-400 text-slate-900 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(45,212,191,0.4)] hover:scale-110 active:scale-95 transition-transform"
-        >
-          <Plus size={32} strokeWidth={2.5} />
+        <div id="empty-state" style="text-align: center; color: var(--text-muted); margin-top: 3rem; display: none;">
+            <p style="font-size: 1.2rem;">No alarms set.</p>
+            <p>Sleep well! 😴</p>
+        </div>
+
+        <!-- FAB -->
+        <button class="fab" onclick="openModal()">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
         </button>
-
-      </div>
-
-      {/* --- Modals & Overlays --- */}
-
-      {/* Create/Edit Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="w-full max-w-sm bg-slate-800 border border-white/10 rounded-3xl p-6 shadow-2xl animate-in slide-in-from-bottom-10 fade-in duration-300">
-            <div className="flex justify-between items-center mb-6">
-              <h3 className="text-xl font-semibold text-white">
-                {editingId ? 'Edit Alarm' : 'Add Alarm'}
-              </h3>
-              <button onClick={() => setIsModalOpen(false)} className="text-slate-400 hover:text-white">
-                <X size={24} />
-              </button>
-            </div>
-
-            <div className="space-y-5">
-              {/* Time Input */}
-              <div>
-                <label className="block text-sm text-slate-400 mb-2">Wake Up Time</label>
-                <input 
-                  type="time" 
-                  value={formTime}
-                  onChange={(e) => setFormTime(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-4 py-4 text-3xl text-center text-white focus:outline-none focus:border-indigo-500 transition-colors"
-                />
-              </div>
-
-              {/* Task Selection */}
-              <div>
-                <label className="block text-sm text-slate-400 mb-2">Wake Up Task</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button 
-                    onClick={() => setFormTask('math')}
-                    className={`flex flex-col items-center gap-2 p-4 rounded-xl border transition-all ${
-                      formTask === 'math' 
-                        ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300' 
-                        : 'bg-slate-900 border-slate-700 text-slate-500 hover:bg-slate-800'
-                    }`}
-                  >
-                    <Calculator size={24} />
-                    <span className="text-sm font-medium">Math</span>
-                  </button>
-                  <button 
-                    onClick={() => setFormTask('typing')}
-                    className={`flex flex-col items-center gap-2 p-4 rounded-xl border transition-all ${
-                      formTask === 'typing' 
-                        ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300' 
-                        : 'bg-slate-900 border-slate-700 text-slate-500 hover:bg-slate-800'
-                    }`}
-                  >
-                    <Brain size={24} />
-                    <span className="text-sm font-medium">Memory</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Volume Slider */}
-              <div>
-                 <div className="flex justify-between text-sm text-slate-400 mb-2">
-                   <label>Alarm Volume</label>
-                   <span>{formVolume}%</span>
-                 </div>
-                 <input 
-                   type="range" 
-                   min="10" 
-                   max="100" 
-                   value={formVolume} 
-                   onChange={(e) => setFormVolume(parseInt(e.target.value))}
-                   className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
-                 />
-              </div>
-
-              <button 
-                onClick={saveAlarm}
-                className="w-full bg-indigo-500 hover:bg-indigo-600 text-white font-semibold py-4 rounded-xl transition-colors mt-2"
-              >
-                {editingId ? 'Save Changes' : 'Set Alarm'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Ringing Overlay */}
-      {ringingAlarm && (
-        <div className="fixed inset-0 z-[100] bg-gradient-to-br from-red-500 to-red-800 flex flex-col items-center justify-center text-center p-6 animate-in fade-in duration-200">
-          <div className="animate-bounce mb-6">
-            <Bell size={80} className="text-white fill-white" />
-          </div>
-          <h1 className="text-5xl font-bold text-white mb-8 tracking-tight">WAKE UP!</h1>
-          
-          <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl">
-            <p className="text-slate-500 text-xs font-bold tracking-widest uppercase mb-4">
-              Solve to Dismiss
-            </p>
-            <div className="text-4xl font-bold text-slate-800 mb-6 font-mono">
-              {taskQuestion}
-            </div>
-            
-            <div className="relative">
-              <input 
-                type="text" 
-                value={userInput}
-                onChange={(e) => setUserInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleTaskSubmit()}
-                placeholder="Type answer..."
-                autoComplete="off"
-                className={`w-full bg-slate-100 border-2 rounded-xl px-4 py-4 text-center text-2xl font-bold text-slate-800 focus:outline-none transition-all ${
-                  inputError ? 'border-red-500 bg-red-50 animate-shake' : 'border-slate-200 focus:border-indigo-500'
-                }`}
-              />
-            </div>
-            
-            <button 
-              onClick={handleTaskSubmit}
-              className="w-full bg-indigo-600 active:bg-indigo-700 text-white font-bold py-4 rounded-xl mt-4 transition-colors text-lg"
-            >
-              Submit Answer
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Success Overlay */}
-      {showSuccess && (
-        <div className="fixed inset-0 z-[100] bg-gradient-to-br from-teal-500 to-emerald-700 flex flex-col items-center justify-center text-center p-8 animate-in zoom-in-95 duration-300">
-          <div className="text-7xl mb-4">☀️</div>
-          <h1 className="text-4xl font-bold text-white mb-2">Good Morning!</h1>
-          <p className="text-emerald-100 text-lg mb-8">You're up and ready to go.</p>
-          
-          <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-6 max-w-sm">
-            <p className="text-xl italic font-serif text-white leading-relaxed opacity-90">
-              "{quote}"
-            </p>
-          </div>
-
-          <button 
-            onClick={handleDismissSuccess}
-            className="mt-10 bg-white text-emerald-600 hover:bg-emerald-50 px-8 py-3 rounded-full font-bold text-lg shadow-lg transition-all hover:scale-105 active:scale-95"
-          >
-            Start My Day
-          </button>
-        </div>
-      )}
-
-      <style>{`
-        @keyframes shake {
-          0%, 100% { transform: translateX(0); }
-          25% { transform: translateX(-5px); }
-          75% { transform: translateX(5px); }
-        }
-        .animate-shake {
-          animation: shake 0.2s ease-in-out 0s 2;
-        }
-        .scrollbar-hide::-webkit-scrollbar {
-            display: none;
-        }
-        .scrollbar-hide {
-            -ms-overflow-style: none;
-            scrollbar-width: none;
-        }
-      `}</style>
     </div>
-  );
-};
 
-export default WakeTaskApp;
+    <!-- Create/Edit Modal -->
+    <div id="modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Add Alarm</h3>
+                <button onclick="closeModal()" style="background:none; border:none; color:var(--text-muted); cursor:pointer;">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+                </button>
+            </div>
+            
+            <div class="form-group">
+                <label>Wake Up Time</label>
+                <input type="time" id="input-time">
+            </div>
+
+            <div class="form-group">
+                <label>Wake Up Task</label>
+                <div class="task-grid">
+                    <div class="task-option selected" onclick="selectTask('math')" id="opt-math">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/></svg>
+                        <span>Math</span>
+                    </div>
+                    <div class="task-option" onclick="selectTask('typing')" id="opt-typing">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.97-1.364"/><path d="M19.97 16.636A4 4 0 0 1 18 18"/></svg>
+                        <span>Memory</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <div style="display:flex; justify-content:space-between; color:var(--text-muted); font-size:0.9rem; margin-bottom:0.5rem;">
+                    <label style="margin:0;">Alarm Volume</label>
+                    <span id="vol-display">100%</span>
+                </div>
+                <input type="range" id="input-volume" min="10" max="100" value="100" oninput="updateVolDisplay(this.value)">
+            </div>
+
+            <button class="btn-primary" onclick="saveAlarm()" id="btn-save">Set Alarm</button>
+        </div>
+    </div>
+
+    <!-- Ringing Overlay -->
+    <div id="alarm-overlay" class="hidden">
+        <div class="bell-icon">🔔</div>
+        <h1 style="color:white; margin-bottom:20px; font-size: 3rem;">WAKE UP!</h1>
+        
+        <div class="task-container">
+            <h3 style="color:#64748b; text-transform:uppercase; font-size:0.8rem; letter-spacing:1px; font-weight:700;">Complete to Stop</h3>
+            <div id="task-question" class="task-question">...</div>
+            <input type="text" id="task-input" class="task-input" placeholder="Type answer here" autocomplete="off">
+            <button class="btn-primary" onclick="checkAnswer()">Submit</button>
+        </div>
+    </div>
+
+    <!-- Success Overlay -->
+    <div id="success-overlay" class="modal-overlay hidden" style="flex-direction: column; align-items: center; justify-content: center; text-align: center; color: white;">
+        <div style="font-size: 4rem;">☀️</div>
+        <h1 style="font-size: 2.5rem; margin: 10px 0;">Good Morning!</h1>
+        <p style="color: #a7f3d0; margin-bottom: 2rem;">You're up and ready to go.</p>
+        <div style="padding: 0 2rem; width: 100%;">
+            <p class="quote-box" id="success-quote">"The future belongs to those who believe in the beauty of their dreams."</p>
+        </div>
+        <button style="background: white; color: #059669; padding: 1rem 3rem; border: none; border-radius: 50px; font-weight: bold; font-size: 1.1rem; cursor: pointer; margin-top: 2rem; box-shadow: 0 4px 15px rgba(0,0,0,0.2);" onclick="dismissSuccess()">Start My Day</button>
+    </div>
+
+    <script>
+        // --- State ---
+        let alarms = JSON.parse(localStorage.getItem('waketask_alarms')) || [];
+        let streak = parseInt(localStorage.getItem('waketask_streak')) || 0;
+        
+        let editingId = null;
+        let selectedTaskType = 'math';
+        
+        let activeAlarm = null;
+        let currentAnswer = null;
+        
+        // Audio
+        let audioCtx = null;
+        let oscillator = null;
+        let gainNode = null;
+        let beepInterval = null;
+
+        // --- Quotes ---
+        const quotes = [
+            "Your limitation—it's only your imagination.",
+            "Push yourself, because no one else is going to do it for you.",
+            "Great things never come from comfort zones.",
+            "Dream it. Wish it. Do it.",
+            "Success doesn't just find you. You have to go out and get it."
+        ];
+
+        // --- Elements ---
+        const els = {
+            clock: document.getElementById('clock-display'),
+            date: document.getElementById('date-display'),
+            streak: document.getElementById('streak-display'),
+            list: document.getElementById('alarm-list'),
+            empty: document.getElementById('empty-state'),
+            modal: document.getElementById('modal'),
+            modalTitle: document.getElementById('modal-title'),
+            inpTime: document.getElementById('input-time'),
+            inpVol: document.getElementById('input-volume'),
+            volDisp: document.getElementById('vol-display'),
+            btnSave: document.getElementById('btn-save'),
+            overlay: document.getElementById('alarm-overlay'),
+            question: document.getElementById('task-question'),
+            answerInp: document.getElementById('task-input'),
+            success: document.getElementById('success-overlay'),
+            quote: document.getElementById('success-quote'),
+            optMath: document.getElementById('opt-math'),
+            optType: document.getElementById('opt-typing')
+        };
+
+        // --- Initialization ---
+        function init() {
+            renderAlarms();
+            updateClock();
+            els.streak.innerHTML = `
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle; margin-top:-2px;"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>
+                Streak: ${streak} days
+            `;
+            setInterval(updateClock, 1000);
+        }
+
+        function updateClock() {
+            const now = new Date();
+            // Clock
+            const h = String(now.getHours()).padStart(2,'0');
+            const m = String(now.getMinutes()).padStart(2,'0');
+            els.clock.textContent = `${h}:${m}`;
+            
+            // Date
+            els.date.textContent = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+
+            // Check Alarm (at 00 seconds)
+            if (now.getSeconds() === 0 && !activeAlarm) {
+                const timeStr = `${h}:${m}`;
+                const match = alarms.find(a => a.time === timeStr && a.enabled);
+                if (match) triggerAlarm(match);
+            }
+        }
+
+        // --- Audio System ---
+        function initAudio() {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') audioCtx.resume();
+        }
+
+        function playSound(volPercent) {
+            initAudio();
+            const maxGain = volPercent / 100;
+            
+            oscillator = audioCtx.createOscillator();
+            gainNode = audioCtx.createGain();
+            
+            oscillator.type = 'square';
+            oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            // Ramp volume
+            gainNode.gain.setValueAtTime(0.01, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(Math.max(0.01, maxGain), audioCtx.currentTime + 0.5);
+
+            oscillator.start();
+            
+            let isHigh = false;
+            beepInterval = setInterval(() => {
+                if(!oscillator) return;
+                const freq = isHigh ? 440 : 880;
+                try { oscillator.frequency.setValueAtTime(freq, audioCtx.currentTime); } catch(e){}
+                isHigh = !isHigh;
+            }, 500);
+        }
+
+        function stopSound() {
+            if (oscillator) {
+                try { oscillator.stop(); oscillator.disconnect(); } catch(e){}
+                oscillator = null;
+            }
+            if (beepInterval) {
+                clearInterval(beepInterval);
+                beepInterval = null;
+            }
+        }
+
+        // --- Alarm Logic ---
+        function triggerAlarm(alarm) {
+            activeAlarm = alarm;
+            els.overlay.classList.remove('hidden');
+            
+            if (alarm.taskType === 'math') {
+                generateMath();
+            } else {
+                generateMemory();
+            }
+            
+            // Play sound with alarm's specific volume (default 100)
+            playSound(alarm.volume || 100);
+        }
+
+        function generateMath() {
+            const ops = ['+', '-', '*'];
+            const op = ops[Math.floor(Math.random() * ops.length)];
+            let n1 = Math.floor(Math.random() * 20) + 5;
+            let n2 = Math.floor(Math.random() * 10) + 1;
+            
+            if(op === '*') n1 = Math.floor(Math.random() * 12);
+
+            let ans = 0;
+            if(op === '+') ans = n1 + n2;
+            else if(op === '-') ans = n1 - n2;
+            else if(op === '*') ans = n1 * n2;
+
+            els.question.textContent = `${n1} ${op} ${n2} = ?`;
+            currentAnswer = ans.toString();
+        }
+
+        function generateMemory() {
+            const words = ['WAKE', 'RISE', 'SHINE', 'FAST', 'GOAL', 'CODE'];
+            const w1 = words[Math.floor(Math.random() * words.length)];
+            const w2 = Math.floor(Math.random() * 999);
+            const target = `${w1}-${w2}`;
+            
+            els.question.textContent = `Memorize: ${target}`;
+            currentAnswer = target;
+            
+            els.answerInp.disabled = true;
+            els.answerInp.placeholder = "Wait 15s...";
+            
+            // 15 Second Timer
+            setTimeout(() => {
+                els.question.textContent = "Type the code:";
+                els.answerInp.disabled = false;
+                els.answerInp.placeholder = "Type answer here";
+                els.answerInp.focus();
+            }, 15000);
+        }
+
+        function checkAnswer() {
+            const val = els.answerInp.value.trim().toUpperCase();
+            if (val === currentAnswer.toString().toUpperCase()) {
+                // Success
+                stopSound();
+                activeAlarm = null;
+                els.overlay.classList.add('hidden');
+                els.answerInp.value = '';
+                els.answerInp.disabled = false; // Reset for next time
+                
+                streak++;
+                localStorage.setItem('waketask_streak', streak);
+                els.streak.textContent = `Streak: ${streak} days`; // Simple text update, SVG implies
+                
+                // Show Success Screen
+                els.quote.textContent = `"${quotes[Math.floor(Math.random() * quotes.length)]}"`;
+                els.success.classList.remove('hidden');
+            } else {
+                // Fail
+                els.answerInp.classList.add('shake-anim');
+                els.answerInp.classList.add('error');
+                setTimeout(() => {
+                    els.answerInp.classList.remove('shake-anim');
+                    els.answerInp.classList.remove('error');
+                }, 500);
+                els.answerInp.value = '';
+            }
+        }
+        
+        // Enter key support
+        els.answerInp.addEventListener('keyup', (e) => {
+            if(e.key === 'Enter') checkAnswer();
+        });
+
+        function dismissSuccess() {
+            els.success.classList.add('hidden');
+            init(); // Re-render streak
+        }
+
+        // --- CRUD / UI ---
+        function renderAlarms() {
+            els.list.innerHTML = '';
+            if (alarms.length === 0) {
+                els.empty.style.display = 'block';
+                return;
+            }
+            els.empty.style.display = 'none';
+
+            // Sort
+            alarms.sort((a,b) => a.time.localeCompare(b.time));
+
+            alarms.forEach(alarm => {
+                const div = document.createElement('div');
+                div.className = 'alarm-card fade-in';
+                
+                // Friendly Time
+                const [h, m] = alarm.time.split(':');
+                const d = new Date(); d.setHours(h); d.setMinutes(m);
+                const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                div.innerHTML = `
+                    <div class="alarm-info">
+                        <h2>${timeStr}</h2>
+                        <div class="alarm-details">
+                            ${alarm.taskType === 'math' 
+                                ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/></svg>' 
+                                : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.97-1.364"/><path d="M19.97 16.636A4 4 0 0 1 18 18"/></svg>'
+                            }
+                            <span>${alarm.taskType}</span>
+                            <span style="opacity:0.5">|</span>
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                            <span>${alarm.volume || 100}%</span>
+                        </div>
+                    </div>
+                    <div class="card-controls">
+                        <button class="icon-btn" onclick="editAlarm(${alarm.id})">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                        </button>
+                        <label class="switch">
+                            <input type="checkbox" ${alarm.enabled ? 'checked' : ''} onchange="toggleAlarm(${alarm.id})">
+                            <span class="slider"></span>
+                        </label>
+                        <button class="icon-btn delete" onclick="deleteAlarm(${alarm.id})">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                        </button>
+                    </div>
+                `;
+                els.list.appendChild(div);
+            });
+        }
+
+        // --- Modal & Form ---
+        function openModal() {
+            editingId = null;
+            els.modalTitle.textContent = "Add Alarm";
+            els.btnSave.textContent = "Set Alarm";
+            
+            // Set default time to now+1 min
+            const now = new Date(); now.setMinutes(now.getMinutes()+1);
+            const h = String(now.getHours()).padStart(2,'0');
+            const m = String(now.getMinutes()).padStart(2,'0');
+            els.inpTime.value = `${h}:${m}`;
+            
+            // Default settings
+            selectTask('math');
+            els.inpVol.value = 100;
+            updateVolDisplay(100);
+            
+            els.modal.classList.remove('hidden');
+        }
+
+        function editAlarm(id) {
+            const alarm = alarms.find(a => a.id === id);
+            if (!alarm) return;
+            
+            editingId = id;
+            els.modalTitle.textContent = "Edit Alarm";
+            els.btnSave.textContent = "Save Changes";
+            
+            els.inpTime.value = alarm.time;
+            selectTask(alarm.taskType);
+            
+            const vol = alarm.volume || 100;
+            els.inpVol.value = vol;
+            updateVolDisplay(vol);
+            
+            els.modal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            els.modal.classList.add('hidden');
+        }
+
+        function selectTask(type) {
+            selectedTaskType = type;
+            if(type === 'math') {
+                els.optMath.classList.add('selected');
+                els.optType.classList.remove('selected');
+            } else {
+                els.optMath.classList.remove('selected');
+                els.optType.classList.add('selected');
+            }
+        }
+
+        function updateVolDisplay(val) {
+            els.volDisp.textContent = val + "%";
+        }
+
+        function saveAlarm() {
+            const time = els.inpTime.value;
+            if(!time) return;
+
+            const vol = parseInt(els.inpVol.value);
+
+            if (editingId) {
+                // Update
+                const idx = alarms.findIndex(a => a.id === editingId);
+                if (idx !== -1) {
+                    alarms[idx].time = time;
+                    alarms[idx].taskType = selectedTaskType;
+                    alarms[idx].volume = vol;
+                }
+            } else {
+                // Create
+                alarms.push({
+                    id: Date.now(),
+                    time: time,
+                    taskType: selectedTaskType,
+                    volume: vol,
+                    enabled: true
+                });
+            }
+
+            localStorage.setItem('waketask_alarms', JSON.stringify(alarms));
+            renderAlarms();
+            closeModal();
+            initAudio(); // Trigger audio context to ensure permission
+        }
+
+        function deleteAlarm(id) {
+            if(!confirm('Delete this alarm?')) return;
+            alarms = alarms.filter(a => a.id !== id);
+            localStorage.setItem('waketask_alarms', JSON.stringify(alarms));
+            renderAlarms();
+        }
+
+        function toggleAlarm(id) {
+            const idx = alarms.findIndex(a => a.id === id);
+            if (idx !== -1) {
+                alarms[idx].enabled = !alarms[idx].enabled;
+                localStorage.setItem('waketask_alarms', JSON.stringify(alarms));
+                renderAlarms();
+            }
+        }
+
+        // Close modal on outside click
+        els.modal.addEventListener('click', (e) => {
+            if (e.target === els.modal) closeModal();
+        });
+
+        // Start
+        init();
+
+    </script>
+</body>
+</html>
